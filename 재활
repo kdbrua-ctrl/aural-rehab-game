@@ -1,0 +1,74 @@
+name: Build Demo APK (TTS -> STT -> Score)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+
+      # 1) CI에서 Flutter 프로젝트를 자동 생성(안드로이드만)
+      - name: Create Flutter project
+        run: |
+          flutter create demo --platforms=android --org com.kdbrua.auralrehab --project-name aural_rehab_demo
+
+      # 2) 템플릿 코드 덮어쓰기
+      - name: Copy template files
+        run: |
+          cp -r template/lib demo/
+          cp template/pubspec.yaml demo/pubspec.yaml
+
+      # 3) Android 권한 추가(마이크 + 인터넷)
+      - name: Patch AndroidManifest permissions
+        run: |
+          MANIFEST="demo/android/app/src/main/AndroidManifest.xml"
+          perl -0777 -i -pe 's/<manifest/<manifest\n    <uses-permission android:name="android.permission.RECORD_AUDIO" \/>\n    <uses-permission android:name="android.permission.INTERNET" \/>\n/' "$MANIFEST"
+
+      # 4) 의존성 설치 + APK 빌드
+      - name: Pub get
+        working-directory: demo
+        run: flutter pub get
+
+      - name: Build debug APK
+        working-directory: demo
+        run: flutter build apk --debug
+
+      - name: Prepare output
+        run: |
+          mkdir -p dist
+          cp demo/build/app/outputs/flutter-apk/app-debug.apk dist/aural-rehab-demo-debug.apk
+
+      # 태그(v*)로 실행된 경우: Release에 APK 첨부(다운로드 링크 생성)
+      - name: Upload APK to GitHub Release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/aural-rehab-demo-debug.apk
+
+      # 수동 실행(workflow_dispatch)인 경우: Actions Artifact로 업로드(임시 다운로드)
+      - name: Upload APK as Artifact (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aural-rehab-demo-apk
+          path: dist/aural-rehab-demo-debug.apk
